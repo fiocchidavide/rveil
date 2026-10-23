@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/fiocchidavide/rveil/internal/format"
+	"davidefiocchi.com/rveil/internal/format"
 )
 
 // File keeps keys in a JSON file readable only by its owner, for tests and

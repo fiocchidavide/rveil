@@ -22,7 +22,7 @@ with the keys in 1Password.
 Build with Go 1.24 or newer:
 
 ```sh
-go install github.com/fiocchidavide/rveil/cmd/rveil@latest
+go install davidefiocchi.com/rveil/cmd/rveil@latest
 ```
 
 rveil needs **rclone**, **bsdtar** (from libarchive: built into macOS; on

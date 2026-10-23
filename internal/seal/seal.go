@@ -13,7 +13,7 @@ import (
 	"filippo.io/age"
 	"github.com/klauspost/compress/zstd"
 
-	"github.com/fiocchidavide/rveil/internal/format"
+	"davidefiocchi.com/rveil/internal/format"
 )
 
 // zstd window: well under the reference decoder's default limit (2^27), so

@@ -1,5 +1,5 @@
 // Package version holds the release version, set at build time:
-// -ldflags "-X github.com/fiocchidavide/rveil/internal/version.Version=v1.0.0"
+// -ldflags "-X davidefiocchi.com/rveil/internal/version.Version=v1.0.0"
 package version
 
 // Version is the release tag, or "dev" for local builds.

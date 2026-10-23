@@ -8,11 +8,11 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/fiocchidavide/rveil/internal/keystore"
-	"github.com/fiocchidavide/rveil/internal/remote"
-	"github.com/fiocchidavide/rveil/internal/ui"
-	"github.com/fiocchidavide/rveil/internal/vault"
-	"github.com/fiocchidavide/rveil/internal/version"
+	"davidefiocchi.com/rveil/internal/keystore"
+	"davidefiocchi.com/rveil/internal/remote"
+	"davidefiocchi.com/rveil/internal/ui"
+	"davidefiocchi.com/rveil/internal/vault"
+	"davidefiocchi.com/rveil/internal/version"
 )
 
 func getenv(name, def string) string {

@@ -8,10 +8,10 @@ import (
 	"os"
 	"strings"
 
-	"github.com/fiocchidavide/rveil/internal/format"
-	"github.com/fiocchidavide/rveil/internal/remote"
-	"github.com/fiocchidavide/rveil/internal/seal"
-	"github.com/fiocchidavide/rveil/internal/ui"
+	"davidefiocchi.com/rveil/internal/format"
+	"davidefiocchi.com/rveil/internal/remote"
+	"davidefiocchi.com/rveil/internal/seal"
+	"davidefiocchi.com/rveil/internal/ui"
 )
 
 // Check compares the index with the remote: every archive must be there

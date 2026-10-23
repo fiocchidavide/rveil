@@ -16,11 +16,11 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/fiocchidavide/rveil/internal/format"
-	"github.com/fiocchidavide/rveil/internal/keystore"
-	"github.com/fiocchidavide/rveil/internal/seal"
-	"github.com/fiocchidavide/rveil/internal/ui"
-	"github.com/fiocchidavide/rveil/internal/version"
+	"davidefiocchi.com/rveil/internal/format"
+	"davidefiocchi.com/rveil/internal/keystore"
+	"davidefiocchi.com/rveil/internal/seal"
+	"davidefiocchi.com/rveil/internal/ui"
+	"davidefiocchi.com/rveil/internal/version"
 )
 
 func newRecord(id string, key string, src seal.Source, res seal.Result) format.Record {

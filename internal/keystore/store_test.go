@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/fiocchidavide/rveil/internal/format"
+	"davidefiocchi.com/rveil/internal/format"
 )
 
 func TestFileStore(t *testing.T) {

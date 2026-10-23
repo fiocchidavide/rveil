@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fiocchidavide/rveil/internal/format"
+	"davidefiocchi.com/rveil/internal/format"
 )
 
 // Key is a master key.

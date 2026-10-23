@@ -1,4 +1,4 @@
-module github.com/fiocchidavide/rveil
+module davidefiocchi.com/rveil
 
 go 1.25.0
 

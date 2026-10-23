@@ -3,7 +3,7 @@ package vault
 import (
 	"testing"
 
-	"github.com/fiocchidavide/rveil/internal/format"
+	"davidefiocchi.com/rveil/internal/format"
 )
 
 func TestMatches(t *testing.T) {

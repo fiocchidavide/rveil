@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fiocchidavide/rveil/internal/format"
+	"davidefiocchi.com/rveil/internal/format"
 )
 
 // OnePassword keeps keys in a 1Password vault, one item per key: the title
