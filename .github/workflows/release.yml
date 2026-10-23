@@ -1,0 +1,43 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        run: |
+          mkdir dist
+          for target in darwin/arm64 darwin/amd64 linux/arm64 linux/amd64; do
+            os=${target%/*} arch=${target#*/}
+            CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath \
+              -ldflags "-s -w -X github.com/fiocchidavide/rveil/internal/version.Version=$GITHUB_REF_NAME" \
+              -o dist/rveil-$os-$arch ./cmd/rveil
+          done
+
+      - name: open.sh and checksums
+        run: |
+          scripts/render-open.sh "$GITHUB_REF_NAME" dist > dist/open.sh
+          if grep -qE '@[A-Z0-9_]+@|echo missing' dist/open.sh; then
+            echo "open.sh has unfilled placeholders" >&2; exit 1
+          fi
+          (cd dist && sha256sum rveil-* open.sh > checksums.txt)
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --verify-tag --title "$GITHUB_REF_NAME" \
+            --notes "Binaries for macOS and Linux, and the open.sh that rveil share links to." \
+            dist/*
