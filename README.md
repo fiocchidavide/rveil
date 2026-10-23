@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/logo-white.png">
+    <img src="docs/logo.png" alt="rveil" width="400">
+  </picture>
+</p>
+
 # rveil
 
 Encrypted, padded archives of your files and folders on an rclone remote,
