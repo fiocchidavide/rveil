@@ -22,7 +22,7 @@ with the keys in 1Password.
 Build with Go 1.24 or newer:
 
 ```sh
-go install davidefiocchi.com/rveil/cmd/rveil@latest
+go install davidefiocchi.com/rveil@latest
 ```
 
 rveil needs **rclone**, **bsdtar** (from libarchive: built into macOS; on
@@ -110,7 +110,7 @@ prints a message to send: the link, that archive's passphrase, and a line to
 paste into Terminal:
 
 ```sh
-curl -fsSL https://github.com/fiocchidavide/rveil/releases/download/<version>/open.sh | bash -s -- <passphrase> <id>.age
+curl -fsSL https://davidefiocchi.com/rveil/<version>/open.sh | bash -s -- <passphrase> <id>.age
 ```
 
 The script downloads that release's rveil, checks it against the checksum

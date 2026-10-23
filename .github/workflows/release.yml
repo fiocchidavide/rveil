@@ -23,7 +23,7 @@ jobs:
             os=${target%/*} arch=${target#*/}
             CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath \
               -ldflags "-s -w -X davidefiocchi.com/rveil/internal/version.Version=$GITHUB_REF_NAME" \
-              -o dist/rveil-$os-$arch ./cmd/rveil
+              -o dist/rveil-$os-$arch .
           done
 
       - name: open.sh and checksums

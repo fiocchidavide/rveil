@@ -374,7 +374,7 @@ func TestOpenShare(t *testing.T) {
 	os.Rename(f, filepath.Join(dl, id+" (1).age"))
 
 	script := e.path("open.sh")
-	rendered, err := exec.Command("bash", "../../scripts/render-open.sh", "v0.0.0-test", filepath.Dir(bin)).Output()
+	rendered, err := exec.Command("bash", "scripts/render-open.sh", "v0.0.0-test", filepath.Dir(bin)).Output()
 	if err != nil {
 		t.Fatal(err)
 	}

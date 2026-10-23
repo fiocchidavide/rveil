@@ -34,5 +34,6 @@ func isRelease(v string) bool { return release.MatchString(v) && !pseudo.MatchSt
 // binaries and open.sh) exist on GitHub.
 func Released() bool { return Version != "dev" && Version != "" }
 
-// Repo is the GitHub repository releases are published from.
-const Repo = "fiocchidavide/rveil"
+// OpenScript is where a release's open.sh is fetched from: the site
+// redirects it to the immutable copy on GitHub.
+func OpenScript() string { return "https://davidefiocchi.com/rveil/" + Version + "/open.sh" }

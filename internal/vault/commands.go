@@ -562,8 +562,8 @@ func (v *Vault) Share(arg string) error {
 		return err
 	}
 	fmt.Fprintf(v.Out, "I'm sending you %s (encrypted).\n1. Download it: %s\n2. Open Terminal and paste:\n"+
-		"curl -fsSL https://github.com/%s/releases/download/%s/open.sh | bash -s -- %s %s.age\n",
-		r.Name, link, version.Repo, version.Version, pass, r.ID)
+		"curl -fsSL %s | bash -s -- %s %s.age\n",
+		r.Name, link, version.OpenScript(), pass, r.ID)
 	ui.Info("Anyone with this message can open %s, and nothing else.", r.Name)
 	ui.Info("rveil rm %s deletes it and the link; rveil rekey %s cuts the passphrase off.", r.ID, r.ID)
 	return nil
