@@ -61,6 +61,9 @@ func (v *Vault) Put(paths []string, direct bool) error {
 		return err
 	}
 	if direct {
+		if err := v.needSHA256(); err != nil {
+			return err
+		}
 		if err := v.load(); err != nil {
 			return err
 		}
@@ -187,6 +190,9 @@ func (v *Vault) Push(args []string) error {
 	if len(todo) == 0 {
 		ui.OK("Nothing staged to push.")
 		return nil
+	}
+	if err := v.needSHA256(); err != nil {
+		return err
 	}
 	if err := v.load(); err != nil {
 		return err

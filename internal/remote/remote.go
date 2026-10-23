@@ -34,6 +34,7 @@ type Remote interface {
 	Move(from, to string) error
 	Remove(name string) error
 	Link(name string) (string, error)
+	CheckSHA256() error
 	String() string
 }
 
@@ -280,9 +281,32 @@ func (r Rclone) SHA256(name string) (string, error) {
 	return h, nil
 }
 
+// Move replaces to with from. --ignore-times stops rclone from skipping
+// the move when both happen to have the same size and time, which padding
+// makes likely; unlike --no-check-dest, it still replaces the destination
+// instead of adding a second file with its name (Drive allows that).
 func (r Rclone) Move(from, to string) error {
-	_, err := r.run("moveto", "moveto", r.path(from), r.path(to))
+	_, err := r.run("moveto", "moveto", "--ignore-times", r.path(from), r.path(to))
 	return err
+}
+
+// CheckSHA256 fails fast if the remote doesn't report SHA-256 hashes,
+// before anything is uploaded.
+func (r Rclone) CheckSHA256() error {
+	out, err := r.run("backend features", "backend", "features", r.Base)
+	if err != nil {
+		return err
+	}
+	var f struct{ Hashes []string }
+	if err := json.Unmarshal(out, &f); err != nil {
+		return fmt.Errorf("reading rclone's feature list: %w", err)
+	}
+	for _, h := range f.Hashes {
+		if h == "sha256" {
+			return nil
+		}
+	}
+	return ErrNoSHA256
 }
 
 func (r Rclone) Remove(name string) error {

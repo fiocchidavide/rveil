@@ -31,6 +31,8 @@ type Vault struct {
 
 	keys keystore.Keys
 
+	shaChecked bool
+
 	loaded   bool
 	index    []format.Record
 	indexSHA string // ciphertext hash of index.age as read; "" if there was none
@@ -179,6 +181,9 @@ func (v *Vault) save() error {
 // against the one computed while writing, and moves it into place. On any
 // failure the partial is removed.
 func (v *Vault) upload(name string, write func(io.Writer) (seal.Result, error)) (seal.Result, error) {
+	if err := v.needSHA256(); err != nil {
+		return seal.Result{}, err
+	}
 	w, err := v.Remote.Create(name + partial)
 	if err != nil {
 		return seal.Result{}, err
@@ -197,6 +202,8 @@ func (v *Vault) upload(name string, write func(io.Writer) (seal.Result, error)) 
 	return res, nil
 }
 
+// verifyAndMove checks an uploaded partial against the hash computed while
+// writing, moves it into place, and checks that the move took effect.
 func (v *Vault) verifyAndMove(name, want string) error {
 	got, err := v.Remote.SHA256(name + partial)
 	if err != nil {
@@ -205,7 +212,28 @@ func (v *Vault) verifyAndMove(name, want string) error {
 	if got != want {
 		return fmt.Errorf("the remote's copy of %s doesn't match what was sent", name)
 	}
-	return v.Remote.Move(name+partial, name)
+	if err := v.Remote.Move(name+partial, name); err != nil {
+		return err
+	}
+	if got, err = v.Remote.SHA256(name); err != nil {
+		return err
+	}
+	if got != want {
+		return fmt.Errorf("%s on the remote isn't the copy just uploaded after the move", name)
+	}
+	return nil
+}
+
+// needSHA256 checks once per command, before the first upload, that the
+// remote can verify uploads at all.
+func (v *Vault) needSHA256() error {
+	if !v.shaChecked {
+		if err := v.Remote.CheckSHA256(); err != nil {
+			return err
+		}
+		v.shaChecked = true
+	}
+	return nil
 }
 
 // --- matching ----------------------------------------------------------------

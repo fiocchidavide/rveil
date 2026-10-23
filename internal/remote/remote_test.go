@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRcloneLocal(t *testing.T) {
@@ -18,6 +19,12 @@ func TestRcloneLocal(t *testing.T) {
 	r := Rclone{Base: filepath.Join(t.TempDir(), "remote")}
 	if es, err := r.List(false); err != nil || len(es) != 0 {
 		t.Fatalf("missing folder: %v %v", es, err)
+	}
+	if err := r.CheckSHA256(); err != nil {
+		t.Fatalf("local remote: %v", err)
+	}
+	if err := (Rclone{Base: ":memory:x"}).CheckSHA256(); err != ErrNoSHA256 {
+		t.Fatalf("memory remote (md5 only): %v", err)
 	}
 
 	w, err := r.Create("a.age.partial")
@@ -35,6 +42,21 @@ func TestRcloneLocal(t *testing.T) {
 	if err := r.Move("a.age.partial", "a.age"); err != nil {
 		t.Fatal(err)
 	}
+
+	// A move over a file of the same size and time still replaces it.
+	dir := r.Base
+	os.WriteFile(filepath.Join(dir, "same.age"), []byte("AAAA"), 0o644)
+	os.WriteFile(filepath.Join(dir, "same.age.partial"), []byte("BBBB"), 0o644)
+	now := time.Now()
+	os.Chtimes(filepath.Join(dir, "same.age"), now, now)
+	os.Chtimes(filepath.Join(dir, "same.age.partial"), now, now)
+	if err := r.Move("same.age.partial", "same.age"); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "same.age")); string(b) != "BBBB" {
+		t.Fatalf("move skipped: %q", b)
+	}
+	os.Remove(filepath.Join(dir, "same.age"))
 
 	local := filepath.Join(t.TempDir(), "b")
 	os.WriteFile(local, []byte(strings.Repeat("x", 100000)), 0o644)
