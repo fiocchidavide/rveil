@@ -158,14 +158,59 @@ func TestLifecycle(t *testing.T) {
 	}
 	k1 := strings.TrimSpace(e.run(e.root, "keys", "new"))
 
-	e.run(e.root, "put", src)
-	e.run(e.root, "put", "--direct", e.path("src", "note.txt"))
-	e.run(e.root, "push")
+	staged := strings.TrimSpace(e.run(e.root, "put", src))
+	direct := strings.TrimSpace(e.run(e.root, "put", "--direct", e.path("src", "note.txt")))
+	_, pushLog, err := e.try(e.root, "", "-vv", "--use-json-log", "push")
+	if err != nil {
+		t.Fatalf("push: %v\n%s", err, pushLog)
+	}
 	if staged, _ := os.ReadDir(e.path("staging")); len(staged) != 0 {
 		t.Fatalf("staging not cleared: %v", staged)
 	}
 	ls := e.run(e.root, "ls", "-l")
 	taxID, noteID := idOf(t, ls, "tax docs 2019/"), idOf(t, ls, "note.txt")
+	if staged != taxID || direct != noteID {
+		t.Fatalf("ids printed: put %q, put --direct %q; ls:\n%s", staged, direct, ls)
+	}
+
+	// The JSON log: every line an object, every step that starts ends, and
+	// the push names the archive it pushed.
+	open := map[string]int{}
+	pushed := ""
+	for _, line := range strings.Split(strings.TrimSpace(pushLog), "\n") {
+		var ev struct{ Level, Event, Step, ID string }
+		if err := json.Unmarshal([]byte(line), &ev); err != nil || ev.Level == "" || ev.Event == "" {
+			t.Fatalf("log line %q: %v", line, err)
+		}
+		switch ev.Event {
+		case "start":
+			open[ev.Step]++
+		case "end":
+			open[ev.Step]--
+		case "pushed":
+			pushed = ev.ID
+		}
+	}
+	for step, n := range open {
+		if n != 0 {
+			t.Fatalf("step %s started %d more times than it ended", step, n)
+		}
+	}
+	if pushed != taxID {
+		t.Fatalf("pushed event names %q, want %s", pushed, taxID)
+	}
+
+	// For scripts: the default and -q log nothing on success; --json
+	// gives the records.
+	for _, flag := range []string{"-v=0", "-q"} {
+		if _, stderr, err := e.try(e.root, "", flag, "ls"); err != nil || stderr != "" {
+			t.Fatalf("ls %s: %v, stderr %q", flag, err, stderr)
+		}
+	}
+	var rec struct{ ID, Kind string }
+	if err := json.Unmarshal([]byte(e.run(e.root, "ls", "--json", "tax")), &rec); err != nil || rec.ID != taxID || rec.Kind != "dir" {
+		t.Fatalf("ls --json: %v %+v", err, rec)
+	}
 
 	// get, twice: the second lands beside the first.
 	out := e.path("out")

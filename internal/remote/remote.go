@@ -58,7 +58,13 @@ func (r Rclone) path(name string) string {
 	return r.Base + "/" + name
 }
 
+// Trace, if set, is told each command before it runs.
+var Trace func(name string, args ...string)
+
 func (r Rclone) cmd(args ...string) *exec.Cmd {
+	if Trace != nil {
+		Trace("rclone", args...)
+	}
 	c := exec.Command("rclone", args...)
 	c.Env = os.Environ()
 	if os.Getenv("RCLONE_DRIVE_CHUNK_SIZE") == "" {

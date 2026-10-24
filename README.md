@@ -36,6 +36,17 @@ rveil needs **rclone**, **bsdtar** (from libarchive: built into macOS; on
 Debian/Ubuntu `apt install libarchive-tools`) and, for the default key store,
 the **1Password CLI** (`op`).
 
+Shell completion comes from `rveil completion zsh` (or `bash`, `fish`). For
+zsh, put it on your `$fpath` as `_rveil`:
+
+```sh
+rveil completion zsh > "${fpath[1]}/_rveil"
+```
+
+It works offline: `push` completes staged archives, `open` `.age` files,
+and `-C` folders. Archive names elsewhere don't complete, since that would
+need 1Password and the remote on every Tab.
+
 ## Setup
 
 1. **An rclone remote.** rveil needs a remote that reports SHA-256, such as
@@ -89,6 +100,47 @@ rveil get tax                           # download and extract here
 
 `rm`, `rekey` and `check`'s fixes ask first; `-y` skips the question, and
 without a terminal they refuse.
+
+### Output and logging
+
+Data goes to stdout: listings, passphrases, extracted paths, and the id of
+each archive `put` and `push` handle (`--json` on `ls`, `keys`, `put` and
+`push`: the full records, as JSON lines). The log goes to stderr and, as
+with rclone, shows only notices and errors unless asked:
+
+| Flag | Log |
+| --- | --- |
+| (none) | `NOTICE` and `ERROR` |
+| `-q` | `ERROR` only |
+| `-v` | also `INFO`: each step as it starts, each outcome, transfer progress every `--stats` (5s) |
+| `-vv` | also `DEBUG`: each step's end and duration, every `rclone` and `op` command run |
+| `--use-json-log` | the same lines as JSON, with fields for programs |
+
+```
+2026/10/24 14:54:57 INFO  : src: uploading hilmih.….age.partial
+2026/10/24 14:54:57 INFO  : src: uploaded: 29.0 MiB / 29.0 MiB, 100%, 427.3 MiB/s
+```
+
+To put a front end on rveil, run it with `-vv --use-json-log` (and
+`--stats 500ms` for smooth progress) and read stderr. Each line is an
+object with `time`, `level`, `msg` and an `event`:
+
+- **`start` / `end`** bracket a step, named in `step`; `end` carries
+  `seconds`, and `error` if it failed. Steps: `unlock_keys`, `create_key`,
+  `check_sha256`, `read_index`, `list_remote`, `download_index`,
+  `decrypt_index`, `save_index`, `check_index`, `seal`, `upload`,
+  `verify_upload`, `move`, `restore`, `open`, `rewrap`, `delete`, `link`,
+  `verify`, `read_orphan`.
+- **`progress`** reports a transfer: `step`, `bytes`, `total`,
+  `bytes_per_second`, `eta_seconds`.
+- **`exec`** is a command about to run: `command`, `args`.
+- **Outcomes** name what happened: `sealed`, `sizes`, `pushed`,
+  `restored`, `extracted`, `rekeyed`, `deleted`, `key_created`, `shared`,
+  `verified`, `readded`, `dropped`, `repaired`, and for problems
+  `failed`, `fatal`, `missing`, `orphan`, `partial`, `hash_mismatch`.
+
+Events about an archive carry `id`, `archive` (its name), `kind`, `key`
+and `size`.
 
 ### Rotating keys
 

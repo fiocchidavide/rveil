@@ -20,7 +20,13 @@ type OnePassword struct{ Vault string }
 
 func (o OnePassword) String() string { return "1Password vault " + o.Vault }
 
+// Trace, if set, is told each command before it runs.
+var Trace func(name string, args ...string)
+
 func (o OnePassword) op(stdin []byte, args ...string) ([]byte, error) {
+	if Trace != nil {
+		Trace("op", args...)
+	}
 	cmd := exec.Command("op", args...)
 	if stdin != nil {
 		cmd.Stdin = bytes.NewReader(stdin)

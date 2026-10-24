@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 
 	"davidefiocchi.com/rveil/internal/format"
@@ -24,7 +23,9 @@ func (v *Vault) Check(deep, yes bool) error {
 	if err := v.load(); err != nil {
 		return err
 	}
+	s := ui.Begin("list_remote", fmt.Sprintf("Listing %s with hashes", v.Remote), "remote", v.Remote.String(), "hashes", true)
 	entries, err := v.Remote.List(true)
+	s.End(err, "files", len(entries))
 	if err != nil {
 		return err
 	}
@@ -48,7 +49,7 @@ func (v *Vault) Check(deep, yes bool) error {
 				orphans = append(orphans, e)
 			}
 		default:
-			ui.Info("Not rveil's, left alone: %s", e.Name)
+			ui.Info("Not rveil's, left alone: "+e.Name, "event", "foreign", "file", e.Name, "size", e.Size)
 		}
 	}
 
@@ -58,11 +59,15 @@ func (v *Vault) Check(deep, yes bool) error {
 		e, ok := onRemote[r.ID+".age"]
 		switch {
 		case !ok:
-			ui.Warn("In the index but not on the remote: %s", row(r, true))
+			ui.Notice(fmt.Sprintf("%s: in the index but not on the remote (%s.age)", r.Name, r.ID),
+				append([]any{"event", "missing"}, fields(r)...)...)
 			missing = append(missing, r.ID)
 		case e.SHA256 != "" && e.SHA256 != r.AgeSHA256:
-			ui.Err("Doesn't match its recorded hash: %s", row(r, true))
+			ui.Error(fmt.Sprintf("%s: %s.age doesn't match its recorded hash", r.Name, r.ID),
+				append([]any{"event", "hash_mismatch", "got", e.SHA256, "want", r.AgeSHA256}, fields(r)...)...)
 			bad++
+		default:
+			ui.Debug(fmt.Sprintf("%s: %s.age present, hash matches", r.Name, r.ID), append([]any{"event", "ok"}, fields(r)...)...)
 		}
 	}
 	for name := range onRemote {
@@ -70,34 +75,34 @@ func (v *Vault) Check(deep, yes bool) error {
 			archives++
 		}
 	}
-	ui.Info("%d archive(s) in the index, %d on the remote", len(v.index), archives)
+	ui.Info(fmt.Sprintf("%d archive(s) in the index, %d on the remote", len(v.index), archives),
+		"event", "counts", "indexed", len(v.index), "on_remote", archives)
 
 	if deep {
 		bad += v.deepCheck(onRemote)
 	}
 
-	if len(partials) > 0 {
-		ui.Warn("%d unfinished upload(s) (*.partial) to delete.", len(partials))
+	for _, p := range partials {
+		ui.Notice("Unfinished upload: "+p, "event", "partial", "file", p)
 	}
-	if len(orphans) > 0 {
-		ui.Warn("%d archive(s) on the remote but not in the index:", len(orphans))
-		for _, e := range orphans {
-			fmt.Fprintf(os.Stderr, "  %s  %s\n", e.Name, ui.Bytes(e.Size))
-		}
+	for _, e := range orphans {
+		ui.Notice(fmt.Sprintf("On the remote but not in the index: %s (%s)", e.Name, ui.Bytes(e.Size)),
+			"event", "orphan", "file", e.Name, "size", e.Size)
 	}
 	indexFromPartial := v.indexSHA == "" && len(v.index) > 0
 	if indexFromPartial {
-		ui.Warn("The index was only found as %s (a save was interrupted).", format.IndexFile+partial)
+		ui.Notice(fmt.Sprintf("The index was only found as %s (a save was interrupted)", format.IndexFile+partial),
+			"event", "index_from_partial")
 	}
 	if len(partials)+len(orphans)+len(missing) > 0 || indexFromPartial {
 		question := "Fix this (delete unfinished uploads, re-add orphans after reading them, " +
 			"drop entries whose archive is gone, save the index)?"
-		if err := confirm(yes, question); err != nil {
+		if err := confirm(yes, question, nil); err != nil {
 			return err
 		}
 		v.repair(partials, orphans, missing)
 	} else if bad == 0 {
-		ui.OK("The index and the remote agree.")
+		ui.Notice("The index and the remote agree", "event", "agree", "archives", len(v.index))
 	}
 	if bad > 0 {
 		return errQuiet
@@ -108,7 +113,7 @@ func (v *Vault) Check(deep, yes bool) error {
 func (v *Vault) deepCheck(onRemote map[string]remote.Entry) int {
 	ks, err := v.Keys()
 	if err != nil {
-		ui.Err("%v", err)
+		ui.Error(err.Error(), "event", "failed", "error", err.Error())
 		return 1
 	}
 	bad := 0
@@ -116,11 +121,17 @@ func (v *Vault) deepCheck(onRemote map[string]remote.Entry) int {
 		if _, ok := onRemote[r.ID+".age"]; !ok {
 			continue
 		}
-		ui.Step("[%d/%d] Verifying %s", i+1, len(v.index), r.Name)
-		if err := v.verifyArchive(ks.Passphrase, r, onRemote[r.ID+".age"].Size); err != nil {
-			ui.Err("%s: %v", r.Name, err)
+		size := onRemote[r.ID+".age"].Size
+		s := ui.Begin("verify", fmt.Sprintf("%s: downloading and decrypting %s.age (%d/%d)", r.Name, r.ID, i+1, len(v.index)),
+			append([]any{"age_bytes", size, "n", i + 1, "of", len(v.index)}, fields(r)...)...)
+		err := v.verifyArchive(ks.Passphrase, r, size)
+		s.End(err)
+		if err != nil {
+			ui.Error(fmt.Sprintf("%s: %v", r.Name, err), append([]any{"event", "failed", "error", err.Error()}, fields(r)...)...)
 			bad++
+			continue
 		}
+		ui.Info(r.Name+": verified", append([]any{"event", "verified"}, fields(r)...)...)
 	}
 	return bad
 }
@@ -136,8 +147,8 @@ func (v *Vault) verifyArchive(passFor func(string) (string, error), r format.Rec
 	}
 	defer rc.Close()
 	ageSum := sha256.New()
-	prog := ui.NewProgress(r.Name, size)
-	defer prog.Done()
+	prog := ui.NewProgress("verify", r.Name+": verified", size, "archive", r.Name, "id", r.ID)
+	defer prog.End()
 	rd, err := seal.NewReader(io.TeeReader(io.TeeReader(rc, ageSum), prog), pass)
 	if err != nil {
 		return err
@@ -163,49 +174,46 @@ func (v *Vault) verifyArchive(passFor func(string) (string, error), r format.Rec
 func (v *Vault) repair(partials []string, orphans []remote.Entry, missing []string) {
 	ks, err := v.Keys()
 	if err != nil {
-		ui.Err("%v", err)
+		ui.Error(err.Error(), "event", "failed", "error", err.Error())
 		return
 	}
 	for _, id := range missing {
+		ui.Info("Dropping "+id+" from the index", "event", "dropped", "id", id)
 		v.removeRecord(id)
 	}
 	var unreadable []string
 	added := 0
 	for _, e := range orphans {
 		id := strings.TrimSuffix(e.Name, ".age")
-		ui.Step("Reading %s", e.Name)
+		s := ui.Begin("read_orphan", "Reading "+e.Name, "file", e.Name, "size", e.Size)
 		rec, err := v.readOrphan(ks.Passphrase, id, e)
+		s.End(err)
 		if err != nil {
-			ui.Err("%s: %v", e.Name, err)
+			ui.Error(fmt.Sprintf("%s: %v", e.Name, err), "event", "failed", "file", e.Name, "error", err.Error())
 			unreadable = append(unreadable, e.Name)
 			continue
 		}
 		v.index = append(v.index, rec)
 		added++
-		ui.OK("%s is %s", e.Name, rec.Name)
+		ui.Info(fmt.Sprintf("%s is %s; re-added", e.Name, rec.Name), append([]any{"event", "readded"}, fields(rec)...)...)
 	}
 	if added > 0 || len(missing) > 0 || (v.indexSHA == "" && len(v.index) > 0) {
 		if err := v.save(); err != nil {
-			ui.Err("%v", err)
+			ui.Error(err.Error(), "event", "failed", "error", err.Error())
 			return
 		}
-		ui.OK("Saved the index (%d re-added, %d dropped).", added, len(missing))
+		ui.Notice(fmt.Sprintf("Repaired the index: %d re-added, %d dropped", added, len(missing)),
+			"event", "repaired", "readded", added, "dropped", len(missing))
 	}
 	for _, p := range partials {
-		if err := v.Remote.Remove(p); err != nil {
-			ui.Warn("Couldn't delete %s: %v", p, err)
-		}
-	}
-	if len(partials) > 0 {
-		ui.OK("Deleted %d unfinished upload(s).", len(partials))
+		v.removeFile(p)
 	}
 	if len(unreadable) > 0 {
-		ui.Warn("%d orphan(s) don't open with their key (damaged, or their key is gone).", len(unreadable))
-		if ok, _ := ui.Confirm("Delete them from the remote?"); ok {
+		ui.Notice(fmt.Sprintf("%d orphan(s) don't open with their key (damaged, or their key is gone)", len(unreadable)),
+			"event", "unreadable", "count", len(unreadable))
+		if ok, _ := ui.Confirm("Delete them from the remote?", unreadable); ok {
 			for _, name := range unreadable {
-				if err := v.Remote.Remove(name); err != nil {
-					ui.Warn("Couldn't delete %s: %v", name, err)
-				}
+				v.removeFile(name)
 			}
 		}
 	}
@@ -236,4 +244,16 @@ func (v *Vault) readOrphan(passFor func(string) (string, error), id string, e re
 	return format.Record{ID: id, Key: format.KeyOf(id), Name: name, Kind: kind,
 		Created: e.ModTime.UTC().Truncate(1e9), Size: size, SHA256: sha,
 		AgeSHA256: hex.EncodeToString(ageSum.Sum(nil))}, nil
+}
+
+// removeFile deletes a file from the remote, logging how it went.
+func (v *Vault) removeFile(name string) {
+	s := ui.Begin("delete", "Deleting "+name, "file", name)
+	err := v.Remote.Remove(name)
+	s.End(err)
+	if err != nil {
+		ui.Notice(fmt.Sprintf("Couldn't delete %s: %v", name, err), "event", "delete_failed", "file", name, "error", err.Error())
+		return
+	}
+	ui.Info("Deleted "+name, "event", "deleted", "file", name)
 }

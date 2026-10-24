@@ -22,10 +22,12 @@ const windowSize = 1 << 23
 
 // Result describes a sealed stream.
 type Result struct {
-	Size      int64  // plaintext bytes (the tar stream)
-	SHA256    string // of the plaintext
-	AgeSize   int64
-	AgeSHA256 string
+	Size       int64  // plaintext bytes (the tar stream)
+	SHA256     string // of the plaintext
+	Compressed int64  // zstd output, before padding (0 after Rewrap)
+	Padded     int64  // with the padding, before age (0 after Rewrap)
+	AgeSize    int64
+	AgeSHA256  string
 }
 
 // ErrVerify means the inline check of the written archive failed.
@@ -159,7 +161,8 @@ func Stream(r io.Reader, pass string, out io.Writer) (Result, error) {
 		return Result{}, err
 	}
 	vsha, vsize, verr := v.finish()
-	res := Result{Size: plain.n, SHA256: plain.sum(), AgeSize: ageSum.n, AgeSHA256: ageSum.sum()}
+	res := Result{Size: plain.n, SHA256: plain.sum(), Compressed: pad.Payload(), Padded: pad.Total(),
+		AgeSize: ageSum.n, AgeSHA256: ageSum.sum()}
 	if verr != nil || vsha != res.SHA256 || vsize != res.Size {
 		return Result{}, fmt.Errorf("%w (%v)", ErrVerify, verr)
 	}

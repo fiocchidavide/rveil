@@ -74,14 +74,17 @@ func (v *Vault) Put(paths []string, direct bool) error {
 	for i, p := range paths {
 		src, err := seal.Resolve(p)
 		if err != nil {
-			ui.Err("%v", err)
+			ui.Error(err.Error(), "event", "failed", "path", p, "error", err.Error())
 			failed++
 			continue
 		}
 		size := contentSize(src.Path)
-		ui.Step("[%d/%d] %s (%s)", i+1, len(paths), src.Name, ui.Bytes(size))
+		ui.Info(fmt.Sprintf("%s: sealing %s (%d/%d)", src.Name, ui.Bytes(size), i+1, len(paths)),
+			"event", "archive", "archive", src.Name, "kind", src.Kind, "path", src.Path, "files_bytes", size,
+			"n", i+1, "of", len(paths))
 		if src.Path != mustAbs(p) {
-			ui.Info("%s is a symlink; sealing what it points to: %s", p, src.Path)
+			ui.Info(fmt.Sprintf("%s is a symlink; sealing what it points to: %s", p, src.Path),
+				"event", "symlink", "path", p, "target", src.Path)
 		}
 		id := format.NewArchiveID(cur.ID)
 		pass, err := format.Passphrase(cur.Master, id)
@@ -94,13 +97,13 @@ func (v *Vault) Put(paths []string, direct bool) error {
 			err = v.putStaged(src, id, cur.ID, pass, size)
 		}
 		if err != nil {
-			ui.Err("%s: %v", src.Name, err)
+			ui.Error(fmt.Sprintf("%s: %v", src.Name, err), "event", "failed", "archive", src.Name, "error", err.Error())
 			failed++
 		}
 	}
 	if !direct {
 		if n := len(v.staged()); n > 0 {
-			ui.Info("%d archive(s) staged. Upload with: rveil push", n)
+			ui.Info(fmt.Sprintf("%d archive(s) staged; upload with: rveil push", n), "event", "staged_total", "count", n)
 		}
 	}
 	if failed > 0 {
@@ -109,25 +112,40 @@ func (v *Vault) Put(paths []string, direct bool) error {
 	return nil
 }
 
+// sealed logs a new archive with its size after each stage of sealing.
+func sealed(msg string, files int64, rec format.Record, res seal.Result) {
+	ui.Info(fmt.Sprintf("%s: %s files → %s tar → %s zstd → %s padded → %s age", rec.Name, ui.Bytes(files),
+		ui.Bytes(res.Size), ui.Bytes(res.Compressed), ui.Bytes(res.Padded), ui.Bytes(res.AgeSize)),
+		append([]any{"event", "sizes", "files_bytes", files, "tar_bytes", res.Size, "zstd_bytes", res.Compressed,
+			"padded_bytes", res.Padded, "age_bytes", res.AgeSize}, fields(rec)...)...)
+	ui.Info(rec.Name+": "+msg, append([]any{"event", "sealed", "sha256", rec.SHA256, "age_sha256", rec.AgeSHA256},
+		fields(rec)...)...)
+}
+
 func mustAbs(p string) string {
 	a, _ := filepath.Abs(p)
 	return a
 }
 
 func (v *Vault) putDirect(src seal.Source, id, key, pass string, size int64) error {
-	prog := ui.NewProgress(src.Name, size)
+	s := ui.Begin("seal", fmt.Sprintf("%s: sealing and uploading as %s.age", src.Name, id),
+		"archive", src.Name, "id", id, "key", key, "files_bytes", size)
+	prog := ui.NewProgress("seal", src.Name+": sealed", size, "archive", src.Name, "id", id)
 	res, err := v.upload(id+".age", func(w io.Writer) (seal.Result, error) {
 		return seal.SealPath(src, pass, w, prog)
 	})
-	prog.Done()
+	prog.End()
+	s.End(err)
 	if err != nil {
 		return err
 	}
-	v.index = append(v.index, newRecord(id, key, src, res))
+	rec := newRecord(id, key, src, res)
+	v.index = append(v.index, rec)
 	if err := v.save(); err != nil {
 		return fmt.Errorf("%w; %s.age is on the remote but not in the index (rveil check re-adds it)", err, id)
 	}
-	ui.OK("%s is on the remote as %s.age, verified (%s)", src.Name, id, ui.Bytes(res.AgeSize))
+	sealed("on the remote as "+id+".age, verified", size, rec, res)
+	v.emit(rec)
 	return nil
 }
 
@@ -142,25 +160,30 @@ func (v *Vault) putStaged(src seal.Source, id, key, pass string, size int64) err
 	if err != nil {
 		return err
 	}
-	prog := ui.NewProgress(src.Name, size)
+	s := ui.Begin("seal", fmt.Sprintf("%s: sealing into %s", src.Name, out+partial),
+		"archive", src.Name, "id", id, "key", key, "files_bytes", size, "file", out+partial)
+	prog := ui.NewProgress("seal", src.Name+": sealed", size, "archive", src.Name, "id", id)
 	res, err := seal.SealPath(src, pass, f, prog)
-	prog.Done()
+	prog.End()
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}
 	if err == nil {
 		err = os.Rename(out+partial, out)
 	}
+	s.End(err)
 	if err != nil {
 		os.Remove(out + partial)
 		return err
 	}
-	rec, _ := json.Marshal(newRecord(id, key, src, res))
-	if err := os.WriteFile(filepath.Join(v.Staging, id+".json"), append(rec, '\n'), 0o600); err != nil {
+	rec := newRecord(id, key, src, res)
+	b, _ := json.Marshal(rec)
+	if err := os.WriteFile(filepath.Join(v.Staging, id+".json"), append(b, '\n'), 0o600); err != nil {
 		os.Remove(out)
 		return err
 	}
-	ui.OK("Sealed %s: %s → %s, verified", src.Name, ui.Bytes(res.Size), ui.Bytes(res.AgeSize))
+	sealed("staged as "+id+".age, verified", size, rec, res)
+	v.emit(rec)
 	return nil
 }
 
@@ -187,8 +210,9 @@ func (v *Vault) Push(args []string) error {
 			todo = append(todo, r)
 		}
 	}
+	ui.Debug(fmt.Sprintf("%d archive(s) to push", len(todo)), "event", "push_plan", "count", len(todo))
 	if len(todo) == 0 {
-		ui.OK("Nothing staged to push.")
+		ui.Info("Nothing staged to push", "event", "nothing_to_do")
 		return nil
 	}
 	if err := v.needSHA256(); err != nil {
@@ -202,36 +226,47 @@ func (v *Vault) Push(args []string) error {
 		local := filepath.Join(v.Staging, r.ID+".age")
 		fi, err := os.Stat(local)
 		if err != nil {
-			ui.Err("%s: its staged archive is missing; skipping", r.Name)
+			ui.Error(fmt.Sprintf("%s: its staged archive is missing; skipping", r.Name),
+				append([]any{"event", "failed", "error", "staged archive missing"}, fields(r)...)...)
 			failed++
 			continue
 		}
-		ui.Step("[%d/%d] %s (%s)", i+1, len(todo), r.Name, ui.Bytes(fi.Size()))
+		ui.Info(fmt.Sprintf("%s: pushing %s (%d/%d)", r.Name, ui.Bytes(fi.Size()), i+1, len(todo)),
+			append([]any{"event", "archive", "age_bytes", fi.Size(), "n", i + 1, "of", len(todo)}, fields(r)...)...)
 		// Uploaded and indexed by an earlier push that stopped short of
 		// cleaning up.
-		if !v.has(r.ID) {
-			prog := ui.NewProgress(r.Name, fi.Size())
+		if v.has(r.ID) {
+			ui.Info(r.Name+": already on the remote and indexed by an earlier push", append([]any{"event", "already_pushed"}, fields(r)...)...)
+		} else {
+			s := ui.Begin("upload", fmt.Sprintf("%s: uploading %s.age%s", r.Name, r.ID, partial),
+				"archive", r.Name, "id", r.ID, "file", r.ID+".age"+partial, "age_bytes", fi.Size())
+			prog := ui.NewProgress("upload", r.Name+": uploaded", fi.Size(), "archive", r.Name, "id", r.ID)
 			err = v.Remote.Upload(local, r.ID+".age"+partial, prog.Set)
-			prog.Done()
+			prog.End()
+			s.End(err)
 			if err == nil {
 				err = v.verifyAndMove(r.ID+".age", r.AgeSHA256)
 			}
 			if err != nil {
 				v.Remote.Remove(r.ID + ".age" + partial)
-				ui.Err("%s: %v; it stays staged", r.Name, err)
+				ui.Error(fmt.Sprintf("%s: %v; it stays staged", r.Name, err),
+					append([]any{"event", "failed", "error", err.Error()}, fields(r)...)...)
 				failed++
 				continue
 			}
 			v.index = append(v.index, r)
 			if err := v.save(); err != nil {
 				v.removeRecord(r.ID)
-				ui.Err("%v; %s stays staged, run rveil push again", err, r.Name)
+				ui.Error(fmt.Sprintf("%v; %s stays staged, run rveil push again", err, r.Name),
+					append([]any{"event", "failed", "error", err.Error()}, fields(r)...)...)
 				return errQuiet
 			}
 		}
 		os.Remove(local)
 		os.Remove(filepath.Join(v.Staging, r.ID+".json"))
-		ui.OK("%s is on the remote as %s.age, verified", r.Name, r.ID)
+		ui.Debug(r.Name+": removed from staging", append([]any{"event", "unstaged"}, fields(r)...)...)
+		ui.Info(fmt.Sprintf("%s: on the remote as %s.age, verified", r.Name, r.ID), append([]any{"event", "pushed"}, fields(r)...)...)
+		v.emit(r)
 	}
 	if failed > 0 {
 		return errQuiet
@@ -253,11 +288,15 @@ func (v *Vault) Ls(match string, long bool) error {
 		if match != "" && !matches(r, match) {
 			continue
 		}
-		fmt.Fprintln(v.Out, row(r, long))
+		if v.JSON {
+			v.emit(r)
+		} else {
+			fmt.Fprintln(v.Out, row(r, long))
+		}
 		n++
 		total += r.Size
 	}
-	ui.Info("%d archive(s), %s of content", n, ui.Bytes(total))
+	ui.Info(fmt.Sprintf("%d archive(s), %s of content", n, ui.Bytes(total)), "event", "listed", "count", n, "size", total)
 	return nil
 }
 
@@ -278,24 +317,29 @@ func (v *Vault) Get(arg, dir string) error {
 	if err != nil {
 		return err
 	}
-	ui.Step("Restoring %s", r.Name)
+	size := v.listing[r.ID+".age"].Size
+	s := ui.Begin("restore", fmt.Sprintf("%s: downloading %s.age and extracting into %s", r.Name, r.ID, dir),
+		append([]any{"dir", dir, "age_bytes", size}, fields(r)...)...)
 	rc, err := v.Remote.Open(r.ID + ".age")
 	if err != nil {
+		s.End(err)
 		return err
 	}
-	prog := ui.NewProgress(r.Name, v.listing[r.ID+".age"].Size)
+	prog := ui.NewProgress("restore", r.Name+": downloaded", size, "archive", r.Name, "id", r.ID)
 	placed, err := extract(io.TeeReader(rc, prog), pass, dir, r.SHA256)
-	prog.Done()
+	prog.End()
 	if cerr := rc.Close(); err == nil {
 		err = cerr
 	}
+	s.End(err)
 	if err != nil {
 		return err
 	}
 	for _, p := range placed {
+		ui.Info(r.Name+": extracted "+p, append([]any{"event", "extracted", "path", p}, fields(r)...)...)
 		fmt.Fprintln(v.Out, p)
 	}
-	ui.OK("Restored %s, verified", r.Name)
+	ui.Info(r.Name+": restored, verified", append([]any{"event", "restored", "dir", dir}, fields(r)...)...)
 	return nil
 }
 
@@ -330,8 +374,8 @@ func (v *Vault) Key(arg string, index bool) error {
 			pass, _ := format.Passphrase(k.Master, format.IndexID)
 			fmt.Fprintf(v.Out, "%s  %s\n", k.ID, pass)
 		}
-		ui.Info("The index is sealed under one of these keys (usually the first):")
-		ui.Info("  age -d index.age | zstd -d    (age asks for the passphrase)")
+		ui.Info("The index is sealed under one of these keys (usually the first): age -d index.age | zstd -d",
+			"event", "index_passphrases", "keys", len(ks))
 		return nil
 	}
 	id := format.FindArchiveID(arg)
@@ -350,7 +394,8 @@ func (v *Vault) Key(arg string, index bool) error {
 		return err
 	}
 	fmt.Fprintln(v.Out, pass)
-	ui.Info("Decrypt with: age -d %s.age | zstd -d | tar x   (age asks for this passphrase)", id)
+	ui.Info(fmt.Sprintf("Decrypt with: age -d %s.age | zstd -d | tar x (age asks for this passphrase)", id),
+		"event", "passphrase", "id", id)
 	return nil
 }
 
@@ -366,6 +411,15 @@ func (v *Vault) KeysList() error {
 		return keystore.ErrNoKeys
 	}
 	for i, k := range ks {
+		if v.JSON {
+			b, _ := json.Marshal(struct {
+				ID      string    `json:"id"`
+				Created time.Time `json:"created"`
+				Current bool      `json:"current"`
+			}{k.ID, k.Created, i == 0})
+			fmt.Fprintf(v.Out, "%s\n", b)
+			continue
+		}
 		mark := ""
 		if i == 0 {
 			mark = "  current"
@@ -381,14 +435,18 @@ func (v *Vault) KeysNew() error {
 	if err != nil {
 		return err
 	}
+	s := ui.Begin("create_key", fmt.Sprintf("Creating a key in the %s", v.Store), "store", v.Store.String())
 	k, err := keystore.New(v.Store, ks)
+	s.End(err)
 	if err != nil {
 		return err
 	}
 	v.keys = append(keystore.Keys{k}, ks...)
-	ui.OK("Created key %s in the %s; it is the current key", k.ID, v.Store)
+	ui.Info(fmt.Sprintf("Created key %s in the %s; it is the current key", k.ID, v.Store),
+		"event", "key_created", "key", k.ID, "store", v.Store.String())
 	if len(ks) > 0 {
-		ui.Info("Archives under older keys stay readable. Move them with: rveil rekey --from <key>")
+		ui.Info("Archives under older keys stay readable; move them with: rveil rekey --from <key>",
+			"event", "older_keys", "keys", len(ks))
 	}
 	fmt.Fprintln(v.Out, k.ID)
 	return nil
@@ -417,28 +475,33 @@ func (v *Vault) Rekey(from string, args []string, yes bool) error {
 		}
 	}
 	if len(todo) == 0 {
-		ui.OK("Nothing to rekey: no matching archive is under an older key.")
+		ui.Notice("Nothing to rekey: no matching archive is under an older key", "event", "nothing_to_do")
 		return nil
 	}
-	ui.Step("%d archive(s) to re-encrypt under key %s:", len(todo), cur.ID)
+	var items []string
 	for _, r := range todo {
-		fmt.Fprintf(os.Stderr, "  %s\n", row(r, false))
+		ui.Info(fmt.Sprintf("%s: to re-encrypt, %s → %s", r.Name, r.Key, cur.ID),
+			append([]any{"event", "rekey_plan", "to_key", cur.ID}, fields(r)...)...)
+		items = append(items, row(r, false))
 	}
-	if err := confirm(yes, "Re-encrypt them?"); err != nil {
+	if err := confirm(yes, fmt.Sprintf("Re-encrypt these %d archive(s) under key %s?", len(todo), cur.ID), items); err != nil {
 		return err
 	}
 	ks, _ := v.Keys()
 	failed := 0
 	for i, r := range todo {
-		ui.Step("[%d/%d] %s: %s → %s", i+1, len(todo), r.Name, r.Key, cur.ID)
+		ui.Info(fmt.Sprintf("%s: re-encrypting, %s → %s (%d/%d)", r.Name, r.Key, cur.ID, i+1, len(todo)),
+			append([]any{"event", "archive", "to_key", cur.ID, "n", i + 1, "of", len(todo)}, fields(r)...)...)
 		if err := v.rekeyOne(ks, r, cur); err != nil {
-			ui.Err("%s: %v; the old archive is untouched", r.Name, err)
+			ui.Error(fmt.Sprintf("%s: %v; the old archive is untouched", r.Name, err),
+				append([]any{"event", "failed", "error", err.Error()}, fields(r)...)...)
 			failed++
 			continue
 		}
 	}
 	if failed > 0 {
-		ui.Warn("%d archive(s) failed; run the same command again to retry them.", failed)
+		ui.Error(fmt.Sprintf("%d archive(s) failed; run the same command again to retry them", failed),
+			"event", "failed_total", "count", failed)
 		return errQuiet
 	}
 	return nil
@@ -458,11 +521,15 @@ func (v *Vault) rekeyOne(ks keystore.Keys, r format.Record, cur keystore.Key) er
 	if err != nil {
 		return err
 	}
-	prog := ui.NewProgress("re-keying", v.listing[r.ID+".age"].Size)
+	size := v.listing[r.ID+".age"].Size
+	s := ui.Begin("rewrap", fmt.Sprintf("%s: re-encrypting %s.age as %s.age", r.Name, r.ID, newID),
+		append([]any{"new_id", newID, "to_key", cur.ID, "age_bytes", size}, fields(r)...)...)
+	prog := ui.NewProgress("rewrap", r.Name+": re-encrypted", size, "archive", r.Name, "id", r.ID)
 	res, err := v.upload(newID+".age", func(w io.Writer) (seal.Result, error) {
 		return seal.Rewrap(io.TeeReader(in, prog), oldPass, newPass, r.SHA256, w)
 	})
-	prog.Done()
+	prog.End()
+	s.End(err)
 	in.Close() // the new archive verified on its own
 	if err != nil {
 		return err
@@ -475,10 +542,15 @@ func (v *Vault) rekeyOne(ks keystore.Keys, r format.Record, cur keystore.Key) er
 	if err := v.save(); err != nil {
 		return fmt.Errorf("%w; %s.age is an orphan now (rveil check)", err, newID)
 	}
-	if err := v.Remote.Remove(r.ID + ".age"); err != nil {
-		ui.Warn("Couldn't remove the old %s.age: %v (rveil check lists it)", r.ID, err)
+	d := ui.Begin("delete", fmt.Sprintf("%s: deleting the old %s.age", r.Name, r.ID), "archive", r.Name, "id", r.ID)
+	err = v.Remote.Remove(r.ID + ".age")
+	d.End(err)
+	if err != nil {
+		ui.Notice(fmt.Sprintf("Couldn't delete the old %s.age: %v (rveil check lists it)", r.ID, err),
+			"event", "delete_failed", "id", r.ID, "error", err.Error())
 	}
-	ui.OK("Now %s.age", newID)
+	ui.Info(fmt.Sprintf("%s: now %s.age under key %s", r.Name, newID, cur.ID),
+		append([]any{"event", "rekeyed", "new_id", newID, "to_key", cur.ID}, fields(r)...)...)
 	return nil
 }
 
@@ -492,7 +564,7 @@ func (v *Vault) Rm(args []string, yes bool) error {
 	for _, a := range args {
 		found := v.find(a)
 		if len(found) == 0 {
-			ui.Warn("No archive matches %q.", a)
+			ui.Notice(fmt.Sprintf("No archive matches %q", a), "event", "no_match", "match", a)
 		}
 		for _, r := range found {
 			if !slices.ContainsFunc(todo, func(t format.Record) bool { return t.ID == r.ID }) {
@@ -504,12 +576,13 @@ func (v *Vault) Rm(args []string, yes bool) error {
 		return errQuiet
 	}
 	var total int64
-	ui.Step("%d archive(s) to delete from the remote:", len(todo))
+	var items []string
 	for _, r := range todo {
-		fmt.Fprintf(os.Stderr, "  %s\n", row(r, false))
+		ui.Info(r.Name+": to delete", append([]any{"event", "rm_plan"}, fields(r)...)...)
+		items = append(items, row(r, false))
 		total += r.Size
 	}
-	if err := confirm(yes, "Delete them permanently?"); err != nil {
+	if err := confirm(yes, fmt.Sprintf("Delete these %d archive(s) permanently?", len(todo)), items); err != nil {
 		return err
 	}
 	for _, r := range todo {
@@ -520,12 +593,19 @@ func (v *Vault) Rm(args []string, yes bool) error {
 	}
 	failed := 0
 	for _, r := range todo {
-		if err := v.Remote.Remove(r.ID + ".age"); err != nil {
-			ui.Warn("Couldn't delete %s.age: %v (rveil check lists it)", r.ID, err)
+		s := ui.Begin("delete", fmt.Sprintf("%s: deleting %s.age", r.Name, r.ID), fields(r)...)
+		err := v.Remote.Remove(r.ID + ".age")
+		s.End(err)
+		if err != nil {
+			ui.Notice(fmt.Sprintf("Couldn't delete %s.age: %v (rveil check lists it)", r.ID, err),
+				append([]any{"event", "delete_failed", "error", err.Error()}, fields(r)...)...)
 			failed++
+			continue
 		}
+		ui.Info(r.Name+": deleted", append([]any{"event", "deleted"}, fields(r)...)...)
 	}
-	ui.OK("Deleted %d archive(s) (%s of content).", len(todo)-failed, ui.Bytes(total))
+	ui.Info(fmt.Sprintf("Deleted %d archive(s), %s of content", len(todo)-failed, ui.Bytes(total)),
+		"event", "deleted_total", "count", len(todo)-failed, "size", total)
 	if failed > 0 {
 		return errQuiet
 	}
@@ -557,15 +637,18 @@ func (v *Vault) Share(arg string) error {
 	if err != nil {
 		return err
 	}
+	s := ui.Begin("link", fmt.Sprintf("%s: making a public link to %s.age", r.Name, r.ID), fields(r)...)
 	link, err := v.Remote.Link(r.ID + ".age")
+	s.End(err)
 	if err != nil {
 		return err
 	}
 	fmt.Fprintf(v.Out, "I'm sending you %s (encrypted).\n1. Download it: %s\n2. Open Terminal and paste:\n"+
 		"curl -fsSL %s | bash -s -- %s %s.age\n",
 		r.Name, link, version.OpenScript(), pass, r.ID)
-	ui.Info("Anyone with this message can open %s, and nothing else.", r.Name)
-	ui.Info("rveil rm %s deletes it and the link; rveil rekey %s cuts the passphrase off.", r.ID, r.ID)
+	ui.Info(fmt.Sprintf("Anyone with this message can open %s, and nothing else; rveil rm %s deletes it "+
+		"and the link, rveil rekey %s cuts the passphrase off", r.Name, r.ID, r.ID),
+		append([]any{"event", "shared", "link", link}, fields(r)...)...)
 	return nil
 }
 
@@ -595,28 +678,31 @@ func (v *Vault) Seal(path, out string) error {
 		return fmt.Errorf("refusing to overwrite %s", out)
 	}
 	if format.FindArchiveID(filepath.Base(out)) != id {
-		ui.Warn("%s doesn't contain the archive id %s; open it with: rveil open -k - (and its passphrase)", out, id)
+		ui.Notice(fmt.Sprintf("%s doesn't contain the archive id %s; open it with: rveil open -k - (and its passphrase)", out, id),
+			"event", "id_not_in_name", "file", out, "id", id)
 	}
 	size := contentSize(src.Path)
-	ui.Step("Sealing %s (%s)", src.Name, ui.Bytes(size))
 	f, err := os.OpenFile(out+partial, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
 	if err != nil {
 		return err
 	}
-	prog := ui.NewProgress(src.Name, size)
+	s := ui.Begin("seal", fmt.Sprintf("%s: sealing into %s", src.Name, out),
+		"archive", src.Name, "id", id, "key", cur.ID, "files_bytes", size, "file", out)
+	prog := ui.NewProgress("seal", src.Name+": sealed", size, "archive", src.Name, "id", id)
 	res, err := seal.SealPath(src, pass, f, prog)
-	prog.Done()
+	prog.End()
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}
 	if err == nil {
 		err = os.Rename(out+partial, out)
 	}
+	s.End(err)
 	if err != nil {
 		os.Remove(out + partial)
 		return err
 	}
-	ui.OK("Sealed %s: %s → %s, verified", src.Name, ui.Bytes(res.Size), ui.Bytes(res.AgeSize))
+	sealed("written to "+out+", verified", size, newRecord(id, cur.ID, src, res), res)
 	fmt.Fprintln(v.Out, out)
 	return nil
 }
@@ -650,19 +736,33 @@ func (v *Vault) Open(file, dir string, stdin io.Reader) error {
 	}
 	defer f.Close()
 	fi, _ := f.Stat()
-	ui.Step("Opening %s", filepath.Base(file))
-	prog := ui.NewProgress(filepath.Base(file), fi.Size())
+	name := filepath.Base(file)
+	s := ui.Begin("open", fmt.Sprintf("%s: decrypting and extracting into %s", name, dir),
+		"file", file, "dir", dir, "age_bytes", fi.Size())
+	prog := ui.NewProgress("open", name+": read", fi.Size(), "file", file)
 	placed, err := extract(io.TeeReader(f, prog), pass, dir, "")
-	prog.Done()
+	prog.End()
 	if seal.IsWrongKey(err) {
-		return errors.New("wrong passphrase for this archive")
+		err = errors.New("wrong passphrase for this archive")
 	}
+	s.End(err)
 	if err != nil {
 		return err
 	}
 	for _, p := range placed {
+		ui.Info(name+": extracted "+p, "event", "extracted", "file", file, "path", p)
 		fmt.Fprintln(v.Out, p)
 	}
-	ui.OK("Opened %s", filepath.Base(file))
+	ui.Info(name+": opened", "event", "opened", "file", file, "dir", dir)
 	return nil
+}
+
+// StagedNames returns "name\tid" for each staged archive, for completion.
+// It reads only the staging folder: no key store, no remote.
+func (v *Vault) StagedNames() []string {
+	var out []string
+	for _, r := range v.staged() {
+		out = append(out, r.Name+"\t"+r.ID)
+	}
+	return out
 }
