@@ -88,7 +88,7 @@ rveil get tax                           # download and extract here
 | --- | --- |
 | `put [--direct] <path>…` | seal into staging, or with `--direct` straight to the remote |
 | `push [match…]` | upload staged archives; each staged copy goes once its upload is verified |
-| `ls [-l] [match]` | list archives (`-l`: with ids) |
+| `ls [-l] [--staged] [match]` | list archives (`-l`: with ids; `--staged`: those waiting for `push`, read offline) |
 | `get [-C dir] <match>` | download, verify, extract |
 | `key <match\|id>` / `key --index` | print a passphrase, for stock tools |
 | `keys` / `keys new` | list keys, newest (current) first / create one |

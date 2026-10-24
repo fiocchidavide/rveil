@@ -159,6 +159,9 @@ func TestLifecycle(t *testing.T) {
 	k1 := strings.TrimSpace(e.run(e.root, "keys", "new"))
 
 	staged := strings.TrimSpace(e.run(e.root, "put", src))
+	if ls := e.run(e.root, "ls", "-l", "--staged"); !strings.Contains(ls, "tax docs 2019/") || !strings.Contains(ls, staged) {
+		t.Fatalf("ls --staged:\n%s", ls)
+	}
 	direct := strings.TrimSpace(e.run(e.root, "put", "--direct", e.path("src", "note.txt")))
 	_, pushLog, err := e.try(e.root, "", "-vv", "--use-json-log", "push")
 	if err != nil {

@@ -150,10 +150,10 @@ are never touched. Prints each new archive's id (--json: its record).`,
 		RunE:              run(func(v *vault.Vault, args []string) error { return v.Push(args) }),
 	}
 
-	var long bool
+	var long, lsStaged bool
 	ls := &cobra.Command{
 		Use:               "ls [match]",
-		Short:             "List archives: date, key, size, name (-l: with ids)",
+		Short:             "List archives: date, key, size, name (-l: with ids; --staged: those staged)",
 		ValidArgsFunction: noFiles,
 		Args:              cobra.MaximumNArgs(1),
 		RunE: run(func(v *vault.Vault, args []string) error {
@@ -161,10 +161,11 @@ are never touched. Prints each new archive's id (--json: its record).`,
 			if len(args) == 1 {
 				m = args[0]
 			}
-			return v.Ls(m, long)
+			return v.Ls(m, long, lsStaged)
 		}),
 	}
 	ls.Flags().BoolVarP(&long, "long", "l", false, "show archive ids")
+	ls.Flags().BoolVar(&lsStaged, "staged", false, "the archives staged for push, read offline")
 
 	var getDir string
 	get := &cobra.Command{

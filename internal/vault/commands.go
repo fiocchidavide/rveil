@@ -277,12 +277,19 @@ func (v *Vault) Push(args []string) error {
 // --- browse / restore --------------------------------------------------------
 
 // Ls lists archives, oldest first.
-func (v *Vault) Ls(match string, long bool) error {
-	if err := v.load(); err != nil {
-		return err
+// With staged, it lists the archives waiting in staging instead, without
+// the key store or the remote.
+func (v *Vault) Ls(match string, long, staged bool) error {
+	var recs []format.Record
+	if staged {
+		recs = v.staged()
+	} else {
+		if err := v.load(); err != nil {
+			return err
+		}
+		recs = slices.Clone(v.index)
+		sort.SliceStable(recs, func(i, j int) bool { return recs[i].Created.Before(recs[j].Created) })
 	}
-	recs := slices.Clone(v.index)
-	sort.SliceStable(recs, func(i, j int) bool { return recs[i].Created.Before(recs[j].Created) })
 	var n, total int64
 	for _, r := range recs {
 		if match != "" && !matches(r, match) {
